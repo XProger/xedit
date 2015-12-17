@@ -1,6 +1,23 @@
 #include <stdio.h>
-#include <windows.h>
-#include <windowsx.h>
+#include <stdlib.h>
+#include <cstdlib>
+#include <cstring>
+
+#ifdef WIN32
+	#include <windows.h>
+	#include <windowsx.h>
+#endif
+
+#ifdef __linux__
+	#include <sys/time.h>
+	#include <sys/ipc.h>
+	#include <sys/shm.h>
+
+	#include <X11/Xlib.h>
+	#include <X11/Xatom.h>
+	#include <X11/Xutil.h>
+	#include <X11/extensions/XShm.h>
+#endif
 
 void convertFont(const char *inName, const char *outName) {
 	FILE *f = fopen(inName, "rb");
@@ -20,7 +37,6 @@ void convertFont(const char *inName, const char *outName) {
 		char	imgInfo;
 	} *tga = (Header*)data;
 	
-
 	if (tga->width != 128 || tga->height != 256 || tga->bpp != 32) {
 		printf("! wrong %s format\n", inName);
 		delete data;
@@ -58,9 +74,22 @@ void convertFont(const char *inName, const char *outName) {
 	printf("convert %s -> %s\n", inName, outName);
 }
 
-typedef unsigned int Color;
+#ifdef WIN32
+	typedef unsigned int Color;
+#endif
 
-#define COLOR_CLEAR	0xFF000000
+#ifdef __linux__
+	typedef unsigned short Color;
+#endif
+
+Color toColor(unsigned int x) {
+	if (sizeof(Color) == 4)
+		return x;
+	if (sizeof(Color) == 2)
+		return (x & 0xF80000) >> 8 | (x & 0xFC00) >> 5 | (x & 0xFF) >> 3;
+}
+
+#define COLOR_CLEAR	toColor(0xFF000000)
 
 struct Point {
 	int x, y;
@@ -70,12 +99,14 @@ struct Point {
 
 struct Rect {
 	int l, t, r, b;
+	Rect() {}
+	Rect(int l, int t, int r, int b) : l(l), t(t), r(r), b(b) {}
 };
 
-struct Font {
+struct BitFont {
 	unsigned char *data;
 
-	Font(const char *name) {
+	BitFont(const char *name) {
 		FILE *f = fopen(name, "rb");
 		int rows = 256 * 16;
 		data = new unsigned char[rows];
@@ -83,7 +114,7 @@ struct Font {
 		fclose(f);
 	}
 
-	~Font() {
+	~BitFont() {
 		delete data;
 	}
 
@@ -112,27 +143,69 @@ struct Font {
 
 struct Canvas {
 	int		width, height;
+	int		stride;
 	Color	*pixels;
-	Font	*font;
 	Rect	rect;
+	
+#ifdef __linux__
+	XShmSegmentInfo	shminfo;
+	GC		gc;
+	Display	*display;
+	XImage	*image;
 
-	Canvas() : width(0), height(0), pixels(NULL) {
-		font = new Font("font.dat");
+	Canvas(Display *display) : width(0), height(0), pixels(NULL), display(display) {
+		int i;
+		if (!XQueryExtension(display, "MIT-SHM", &i, &i, &i))
+			printf("SHM is not supported\n");
 	}
+#endif
+
+#ifdef WIN32
+	Canvas() : width(0), height(0), pixels(NULL) {}
+#endif
 
 	~Canvas() {
-		delete font;
+	#ifdef WIN32
 		if (pixels) free(pixels);
+	#endif	
+	#ifdef __linux__
+		XShmDetach(display, &shminfo);
+		XDestroyImage(image);
+		shmdt(shminfo.shmaddr);
+	#endif
 	}
 
 	void resize(int width, int height) {
 		if (this->width != width || this->height != height) {
 			this->width = width;
 			this->height = height;
+		#ifdef WIN32
 			pixels = (Color*)realloc(pixels, width * height * 4);
+			stride = width;
+		#endif
+		
+		#ifdef __linux__
+			int depth = DefaultDepth(display, DefaultScreen(display));
+			printf("color depth: %d\n", depth);
+			gc = DefaultGC(display, DefaultScreen(display));
+
+			image = XShmCreateImage(display, NULL, depth, ZPixmap, NULL, &shminfo, width, height);
+
+			shminfo.shmid		= shmget(IPC_PRIVATE, image->bytes_per_line * image->height, IPC_CREAT|0777);
+			shminfo.shmaddr		= image->data = (char*)shmat(shminfo.shmid, 0, 0);
+			shminfo.readOnly	= false;
+
+			XShmAttach(display, &shminfo);
+			XSync(display, false);
+			shmctl(shminfo.shmid, IPC_RMID, 0);
+
+			pixels = (Color*)image->data;
+			stride = image->bytes_per_line / sizeof(Color);
+		#endif
 		}
 	}
-
+	
+#ifdef WIN32
 	void present(HDC dc) {
 		if (rect.l > rect.r || rect.t > rect.b)
 			return;
@@ -142,12 +215,17 @@ struct Canvas {
 		SetDIBitsToDevice(dc, rect.l, rect.t, rect.r - rect.l, rect.b - rect.t, rect.l, rect.t, rect.t, rect.b, pixels, &bmi, 0);
 	//	SetDIBitsToDevice(dc, 0, 0, width, height, 0, 0, 0, height, pixels, &bmi, 0);
 	}
+#endif
 
-	void clear(Color color) {
-		for (int i = 0; i < width * height; i++)
-			pixels[i] = color;
+#ifdef __linux__
+	void present(const Window &window) {
+		if (rect.l > rect.r || rect.t > rect.b)
+			return;
+		XShmPutImage(display, window, gc, image, 0, 0, 0, 0, image->width, image->height, false);
+		XFlush(display);
+		XSync(display, false);
 	}
-
+#endif
 	void scrollX(int delta) {
 
 	}
@@ -165,37 +243,13 @@ struct Canvas {
 	void fill(int x, int y, int w, int h, Color color) {
 		for (int j = y; j < y + h; j++)
 			for (int i = x; i < x + w; i++)
-				pixels[i + j * width] = color;
+				pixels[i + j * stride] = color;
 	};
-
-	Point print(int ox, int x, int y, Color fColor, Color bColor, const char *text) {
-		if (text) {
-			const char *c = &text[0];
-			while (*c) {
-				switch (*c) {
-					case '\n' :
-						break;
-					case '\r' :
-						y += 16;
-						x = 0;
-						break;
-					case '\t' :
-						x = (x / (9 * 4) + 1) * (9 * 4);
-						break;
-					default :
-						if (ox + x >= 0 && ox + x < width - 9 && y >= 0 && y < height - 16)
-							font->putChar(*c, fColor, bColor, &pixels[ox + x + y * width], width);
-						x += 9;
-				}
-				c++;
-			}
-		}
-		return Point(x, y);
-	}
 };
 
 struct Editor {
 private:
+	BitFont	*font;
 	char	*text;
 	Point	cursor;
 	Point	scroll;
@@ -276,7 +330,7 @@ public:
 		};
 
 		bool checkOpcode(const char *str) {
-			static char *opcodes[] = {	"void", "char", "bool", "short", "int", "long", "float", "double", "this", "typedef", "unsigned", "enum",
+			const char *opcodes[] = {	"void", "char", "bool", "short", "int", "long", "float", "double", "this", "typedef", "unsigned", "enum", "union",
 										"sizeof", "return", "const", "static", "struct", "public", "private", "protected", "virtual", "new", "delete",
 										"for", "while", "do", "true", "false", "if", "else", "continue", "break", "switch", "case", "default" };
 
@@ -287,7 +341,7 @@ public:
 		}
 
 		bool checkArgument(const char *str) {
-			static char *args[] = { "#include", "#define", "#undef", "#if", "#ifdef", "#ifndef", "#else", "#endif" };
+			const char *args[] = { "#include", "#define", "#undef", "#if", "#ifdef", "#ifndef", "#else", "#endif" };
 			for (int i = 0; i < sizeof(args) / sizeof(args[0]); i++)
 				if (!strcmp(str, args[i]))
 					return true;
@@ -295,7 +349,7 @@ public:
 		}
 		
 		bool checkDefine(const char *str) {
-			static char *defines[] = {	"NULL", "SEEK_END", "SEEK_CUR", "SEEK_SET", "COLOR_CLEAR", "VK_LEFT", "VK_RIGHT", "VK_UP", "VK_DOWN", "VK_BACK", "CALLBACK", "GetWindowLong", "SetWindowLong", "WIN32", "_DEBUG",
+			const char *defines[] = {	"NULL", "SEEK_END", "SEEK_CUR", "SEEK_SET", "COLOR_CLEAR", "VK_LEFT", "VK_RIGHT", "VK_UP", "VK_DOWN", "VK_BACK", "CALLBACK", "GetWindowLong", "SetWindowLong", "WIN32", "_DEBUG",
 										"GWL_USERDATA", "GWL_WNDPROC", "LOWORD", "HIWORD", "GET_WHEEL_DELTA_WPARAM", "GET_X_LPARAM", "GET_Y_LPARAM", "WM_PAINT", "WM_SIZE", "WM_KEYDOWN", "WM_CHAR", "WM_MOUSEWHEEL", 
 										"WM_LBUTTONDOWN", "WM_LBUTTONUP", "WM_RBUTTONDOWN", "WM_RBUTTONUP", "WM_DESTROY", "DefWindowProc", "CreateWindow", "WS_OVERLAPPEDWINDOW", "SW_SHOWDEFAULT", "GetMessage", "DispatchMessage" };
 			for (int i = 0; i < sizeof(defines) / sizeof(defines[0]); i++)
@@ -305,7 +359,7 @@ public:
 		}
 
 		bool checkType(const char *str) {
-			static char *types[] = { "FILE", "BITMAPINFO", "BITMAPINFOHEADER", "MSG", "LONG", "Header", "RGBA", "Point", "Rect", "Color", "Font",  "Canvas", "Editor", "Theme", "Syntax", "Lexeme", "Window", "HWND", "HDC", "LRESULT", "UINT", "WPARAM", "LPARAM" };
+			const char *types[] = { "FILE", "BITMAPINFO", "BITMAPINFOHEADER", "MSG", "LONG", "Header", "RGBA", "Point", "Rect", "Color", "Font",  "Canvas", "Editor", "Theme", "Syntax", "Lexeme", "Window", "HWND", "HDC", "LRESULT", "UINT", "WPARAM", "LPARAM" };
 			for (int i = 0; i < sizeof(types) / sizeof(types[0]); i++)
 				if (!strcmp(str, types[i]))
 					return true;
@@ -331,7 +385,7 @@ public:
 						lexemeEnd(i + 1);
 						tagText = '\0';
 					} else
-						if ((c == '\r' && (tagComm == '\0' || tagComm == '/')) || (tagComm == '*' && c == '/' && last == '*' && i++)) {
+						if (( (c == '\r' || c == '\n') && (tagComm == '\0' || tagComm == '/')) || (tagComm == '*' && c == '/' && last == '*' && i++)) {
 							lexemeEnd(i);
 							tagComm = '\0';
 						} else
@@ -429,6 +483,8 @@ public:
 	int			curBuffer;
 
 	Editor(const Theme &theme) : text(NULL), cursor(0, 0), scroll(0, 0), offset(0, 0), valid(false), theme(theme), cells(NULL), cols(0), rows(0), curBuffer(0) {
+		font = new BitFont("font.dat");
+
 		FILE *f = fopen("main.cpp", "rb");
 
 		fseek(f, 0, SEEK_END);
@@ -442,6 +498,7 @@ public:
 	}
 
 	~Editor() { 
+		delete font;
 		if (text) free(text);
 		if (cells) free(cells);
 	}
@@ -451,11 +508,13 @@ public:
 	}
 
 	void onKey(int key) {
+		/*
 		if (key == VK_LEFT)		cursor.x--;
 		if (key == VK_RIGHT)	cursor.x++;
 		if (key == VK_UP)		cursor.y--;
 		if (key == VK_DOWN)		cursor.y++;
 		if (key == VK_BACK)		if (text && strlen(text)) { text[strlen(text) - 1] = '\0'; syntax.parse(text); }
+*/
 		valid = false;
 	};
 
@@ -489,7 +548,7 @@ public:
 				cells[i].c			= '\0';
 				cells[i].bColor		= COLOR_BACK_NORMAL;
 				cells[i].bColor		= COLOR_BACK_NORMAL;
-				cells[i].reserved	= 0;
+				cells[i].reserved	= 1;
 			}
 			valid = false;
 		}
@@ -520,7 +579,7 @@ public:
 		for (int i = 0; i < length; i++)
 			switch (text[i]) {
 				case '\n' :
-					break;
+				//	break;
 				case '\r' :
 					x = 0;
 					y++;
@@ -589,14 +648,15 @@ public:
 			char num[4];
 			pos = Point(0, scroll.y);
 			for (int i = 0; i < lines; i++) {
-				itoa(i + 1, num, 10);
+				snprintf(num, sizeof(num), "%d", i);
+			//	itoa(i + 1, num, 10);
 				int len = strlen(num);
 				pos.x = (3 - len);
 				print(0, pos.x, pos.y, COLOR_OPCODE, COLOR_BACK_NORMAL, num, len);
 				pos.y++;
 			}
 
-			Rect &rect = canvas->rect = {cols, rows, 0, 0};
+			Rect &rect = canvas->rect = Rect(cols, rows, 0, 0);
 			//canvas->clear(theme.back_normal);
 			for (int r = 0; r < rows; r++)
 				for (int c = 0; c < cols; c++) {
@@ -605,7 +665,7 @@ public:
 
 					if (cell.id != last.id) {
 						if (cell.c != '\0')
-							canvas->font->putChar(cell.c, theme.byID[cell.fColor], theme.byID[cell.bColor], &canvas->pixels[c * 9 + r * 16 * canvas->width], canvas->width);
+							font->putChar(cell.c, theme.byID[cell.fColor], theme.byID[cell.bColor], &canvas->pixels[c * 9 + r * 16 * canvas->stride], canvas->stride);
 						else
 							canvas->fill(c * 9, r * 16, 9, 16, theme.byID[cell.bColor]);
 
@@ -636,22 +696,22 @@ public:
 };
 
 static const Editor::Theme THEME_DARK = {
-	0xDADADA, // code
-	0xD69D85, // text
-	0x4EC9B0, // type
-	0xBD63C5, // define
-	0xB5CEA8, // number
-	0x569CD6, // opcode
-	0x57A64A, // comment
-	0x7F7F7F, // argument
-	0x000000, // back_line
-	0x1E1E1E, // back_normal
-	0x264F78, // back_selection
-	0x653306, // back_search
-	0xDCDCDC, // cursor
+	toColor(0xDADADA), // code
+	toColor(0xD69D85), // text
+	toColor(0x4EC9B0), // type
+	toColor(0xBD63C5), // define
+	toColor(0xB5CEA8), // number
+	toColor(0x569CD6), // opcode
+	toColor(0x57A64A), // comment
+	toColor(0x7F7F7F), // argument
+	toColor(0x000000), // back_line
+	toColor(0x1E1E1E), // back_normal
+	toColor(0x264F78), // back_selection
+	toColor(0x653306), // back_search
+	toColor(0xDCDCDC), // cursor
 };
 
-struct Window {
+struct Application {
 	int		width, height;
 	Canvas	*canvas;
 	Editor	*editor;
@@ -659,30 +719,29 @@ struct Window {
 #ifdef WIN32
 	HWND	handle;
 	HDC		dc;
-#endif
 
 	static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-		Window *wnd = (Window*)GetWindowLong(hWnd, GWL_USERDATA);
+		Application *app = (Application*)GetWindowLong(hWnd, GWL_USERDATA);
 
 		switch (msg) {
 			case WM_PAINT :
-				wnd->paint();
+				app->paint();
 				ValidateRect(hWnd, NULL);
 				break;
 			case WM_SIZE :
-				wnd->resize(LOWORD(lParam), HIWORD(lParam));
+				app->resize(LOWORD(lParam), HIWORD(lParam));
 				break;
 			case WM_KEYDOWN :
-				wnd->editor->onKey(wParam);
-				wnd->invalidate();
+				app->editor->onKey(wParam);
+				app->invalidate();
 				break;
 			case WM_CHAR :
-				wnd->editor->onChar(wParam);
-				wnd->invalidate();
+				app->editor->onChar(wParam);
+				app->invalidate();
 				break;
 			case WM_MOUSEWHEEL :
-				wnd->editor->onScroll(0, GET_WHEEL_DELTA_WPARAM(wParam) / 120);
-				wnd->invalidate();
+				app->editor->onScroll(0, GET_WHEEL_DELTA_WPARAM(wParam) / 120);
+				app->invalidate();
 				break;
 			case WM_LBUTTONDOWN : 
 			case WM_RBUTTONDOWN : {
@@ -691,38 +750,84 @@ struct Window {
 				}
 				break;
 			case WM_DESTROY :
-				PostQuitMessage(0);
+				app->close();
 				break;
 			default :
 				return DefWindowProc(hWnd, msg, wParam, lParam);
 		}
 		return 0;
 	}
+#endif
 
-	Window(int width, int height) : width(width), height(height) {
+#ifdef __linux__
+	Display	*display;
+	Window	window;
+	Atom	WM_DELETE_WINDOW;
+#endif
+
+	Application(int width, int height) : width(width), height(height) {
+	#ifdef WIN32
 		canvas = new Canvas();
 		editor = new Editor(THEME_DARK);
-	// init window
+
 		handle = CreateWindow("static", "xedit", WS_OVERLAPPEDWINDOW, 0, 0, width, height, NULL, NULL, NULL, NULL);
 		dc = GetDC(handle);
 		SetWindowLong(handle, GWL_USERDATA, (LONG)this);
 		SetWindowLong(handle, GWL_WNDPROC, (LONG)&WndProc);
 		ShowWindow(handle, SW_SHOWDEFAULT);
+	#endif
+	
+	#ifdef __linux__
+		display = XOpenDisplay(NULL);
+		if (!display) {
+			printf("can't connect to X server\n");
+			return;
+		}		
+		Window root = DefaultRootWindow(display);
+		int screen = DefaultScreen(display);
+		
+		XSetWindowAttributes attr;
+		attr.event_mask = ExposureMask | PointerMotionMask | ButtonPressMask | KeyPressMask | StructureNotifyMask;		
+
+		window = XCreateWindow(display, root, 0, 0, width, height, 0, 0, InputOutput, NULL, CWEventMask, &attr);
+					
+		XMapWindow(display, window);
+		XSync(display, false);
+		
+		XStoreName(display, window, "xedit");
+		WM_DELETE_WINDOW = XInternAtom(display, "WM_DELETE_WINDOW", false);
+		XSetWMProtocols(display, window, &WM_DELETE_WINDOW, 1);
+		
+		canvas = new Canvas(display);
+		editor = new Editor(THEME_DARK);
+		resize(800, 600);
+	#endif
 	}
 
-	~Window() {
+	~Application() {
 		delete editor;
 		delete canvas;
+	#ifdef WIN32
 		ReleaseDC(handle, dc);
 		DestroyWindow(handle);
+	#endif
+	
+	#ifdef __linux__
+		XDestroyWindow(display, window);
+		XCloseDisplay(display);
+	#endif
 	}
 
 	void close() {
+	#ifdef WIN32
 		PostQuitMessage(0);
+	#endif
 	}
 
 	void invalidate() {
+	#ifdef WIN32
 		InvalidateRect(handle, NULL, false);
+	#endif
 	}
 
 	void resize(int width, int height) {
@@ -731,25 +836,67 @@ struct Window {
 	}
 
 	void loop() {
+	#ifdef WIN32
 		MSG msg;
 		while (GetMessage(&msg, 0, 0, 0)) {
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);			
 		}
+	#endif
+	
+	#ifdef __linux__
+		XEvent e;
+		bool quit = false;
+		while (!quit) {
+			XNextEvent(display, &e);
+			switch (e.type) {
+				case ButtonPress :
+					if (e.xbutton.button == 4)	editor->onScroll(0, +1);
+					if (e.xbutton.button == 5)	editor->onScroll(0, -1);
+					XClearArea(display, window, 0, 0, width, height, True);
+					break;				
+				case MotionNotify :
+				//	printf("mouse: %d %d\n", e.xmotion.x, e.xmotion.y);
+				//	offset = e.xmotion.y;
+				//	draw(display, window, DefaultGC(display, screen));
+					break;
+				case KeyPress:
+				//	printf("key press\n");
+					break;
+				case ConfigureNotify : {
+						width	= e.xconfigure.width;
+						height	= e.xconfigure.height;
+						editor->resize(width, height);
+					}
+					break;
+				case Expose :
+					paint();
+					break;
+				case ClientMessage :
+					if ((Atom)e.xclient.data.l[0] == WM_DELETE_WINDOW)
+						quit = true;
+					break;					
+			}
+			
+		}	
+	#endif
 	}
 
 	void paint() {
 		editor->render(canvas);
+	#ifdef WIN32
 		canvas->present(dc);
+	#endif
+	#ifdef __linux__
+		canvas->present(window);
+	#endif
 	}
 };
 
-Window *window;
-
 int main() {
 //	convertFont("font.tga", "font.dat");
-	window = new Window(800, 600);
-	window->loop();
-	delete window;
+	Application *app = new Application(800, 600);
+	app->loop();
+	delete app;
 	return 0;
 };
