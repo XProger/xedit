@@ -17,6 +17,12 @@
 	#include <X11/Xatom.h>
 	#include <X11/Xutil.h>
 	#include <X11/extensions/XShm.h>
+	
+	#define VK_LEFT		113
+	#define VK_UP		111
+	#define	VK_RIGHT	114
+	#define	VK_DOWN		116
+	#define	VK_BACK		22
 #endif
 
 void convertFont(const char *inName, const char *outName) {
@@ -153,10 +159,11 @@ struct Canvas {
 	Display	*display;
 	XImage	*image;
 
-	Canvas(Display *display) : width(0), height(0), pixels(NULL), display(display) {
+	Canvas(Display *display) : width(0), height(0), pixels(NULL), display(display), image(image) {
 		int i;
 		if (!XQueryExtension(display, "MIT-SHM", &i, &i, &i))
 			printf("SHM is not supported\n");
+		gc = DefaultGC(display, DefaultScreen(display));
 	}
 #endif
 
@@ -165,17 +172,11 @@ struct Canvas {
 #endif
 
 	~Canvas() {
-	#ifdef WIN32
-		if (pixels) free(pixels);
-	#endif	
-	#ifdef __linux__
-		XShmDetach(display, &shminfo);
-		XDestroyImage(image);
-		shmdt(shminfo.shmaddr);
-	#endif
+		resize(0, 0);
 	}
 
 	void resize(int width, int height) {
+			printf("resize %d %d\n", width, height);
 		if (this->width != width || this->height != height) {
 			this->width = width;
 			this->height = height;
@@ -185,9 +186,17 @@ struct Canvas {
 		#endif
 		
 		#ifdef __linux__
-			int depth = DefaultDepth(display, DefaultScreen(display));
-			printf("color depth: %d\n", depth);
-			gc = DefaultGC(display, DefaultScreen(display));
+			if (image) {
+				XShmDetach(display, &shminfo);
+				XDestroyImage(image);
+				shmdt(shminfo.shmaddr);
+			}
+			
+			if (!width || !height)
+				return;
+				
+			int depth = 16;//DefaultDepth(display, DefaultScreen(display));
+			printf("color depth:# %d\n", depth);
 
 			image = XShmCreateImage(display, NULL, depth, ZPixmap, NULL, &shminfo, width, height);
 
@@ -221,7 +230,7 @@ struct Canvas {
 	void present(const Window &window) {
 		if (rect.l > rect.r || rect.t > rect.b)
 			return;
-		XShmPutImage(display, window, gc, image, 0, 0, 0, 0, image->width, image->height, false);
+		XShmPutImage(display, window, gc, image, rect.l, rect.t, rect.l, rect.t, rect.r - rect.l, rect.b - rect.t, false);
 		XFlush(display);
 		XSync(display, false);
 	}
@@ -508,13 +517,12 @@ public:
 	}
 
 	void onKey(int key) {
-		/*
 		if (key == VK_LEFT)		cursor.x--;
 		if (key == VK_RIGHT)	cursor.x++;
 		if (key == VK_UP)		cursor.y--;
 		if (key == VK_DOWN)		cursor.y++;
 		if (key == VK_BACK)		if (text && strlen(text)) { text[strlen(text) - 1] = '\0'; syntax.parse(text); }
-*/
+
 		valid = false;
 	};
 
@@ -828,6 +836,10 @@ struct Application {
 	#ifdef WIN32
 		InvalidateRect(handle, NULL, false);
 	#endif
+	
+	#ifdef __linux__
+		XClearArea(display, window, 0, 0, width, height, True);
+	#endif	
 	}
 
 	void resize(int width, int height) {
@@ -853,20 +865,29 @@ struct Application {
 				case ButtonPress :
 					if (e.xbutton.button == 4)	editor->onScroll(0, +1);
 					if (e.xbutton.button == 5)	editor->onScroll(0, -1);
-					XClearArea(display, window, 0, 0, width, height, True);
+					invalidate();
 					break;				
 				case MotionNotify :
 				//	printf("mouse: %d %d\n", e.xmotion.x, e.xmotion.y);
 				//	offset = e.xmotion.y;
 				//	draw(display, window, DefaultGC(display, screen));
 					break;
-				case KeyPress:
-				//	printf("key press\n");
+				case KeyPress: {
+					//	printf("key: %d %d\n", e.xkey.state, e.xkey.keycode);
+						char c;
+						if (e.xkey.keycode != VK_BACK &&
+							XLookupString(&e.xkey, &c, 1, NULL, NULL)) {
+							editor->onChar(c);
+						//	printf("char %d %d\n", len, (int));
+						} else
+							editor->onKey(e.xkey.keycode);
+						invalidate();
+					}
 					break;
 				case ConfigureNotify : {
 						width	= e.xconfigure.width;
 						height	= e.xconfigure.height;
-						editor->resize(width, height);
+						resize(width, height);
 					}
 					break;
 				case Expose :
