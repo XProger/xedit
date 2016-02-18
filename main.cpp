@@ -85,7 +85,7 @@ void convertFont(const char *inName, const char *outName) {
 #endif
 
 #ifdef __linux__
-	typedef unsigned short Color;
+	typedef unsigned int Color;
 #endif
 
 Color toColor(unsigned int x) {
@@ -159,7 +159,7 @@ struct Canvas {
 	Display	*display;
 	XImage	*image;
 
-	Canvas(Display *display) : width(0), height(0), pixels(NULL), display(display), image(image) {
+	Canvas(Display *display) : width(0), height(0), pixels(NULL), display(display), image(NULL) {
 		int i;
 		if (!XQueryExtension(display, "MIT-SHM", &i, &i, &i))
 			printf("SHM is not supported\n");
@@ -176,8 +176,9 @@ struct Canvas {
 	}
 
 	void resize(int width, int height) {
-			printf("resize %d %d\n", width, height);
 		if (this->width != width || this->height != height) {
+			printf("resize %d %d\n", width, height);
+
 			this->width = width;
 			this->height = height;
 		#ifdef WIN32
@@ -195,7 +196,7 @@ struct Canvas {
 			if (!width || !height)
 				return;
 				
-			int depth = 16;//DefaultDepth(display, DefaultScreen(display));
+			int depth = DefaultDepth(display, DefaultScreen(display));
 			printf("color depth:# %d\n", depth);
 
 			image = XShmCreateImage(display, NULL, depth, ZPixmap, NULL, &shminfo, width, height);
