@@ -665,7 +665,8 @@ public:
 				pos.y++;
 			}
 
-			Rect &rect = canvas->rect = Rect(cols, rows, 0, 0);
+			canvas->rect = Rect(0, 0, canvas->width, canvas->height);
+
 			//canvas->clear(theme.back_normal);
 			for (int r = 0; r < rows; r++)
 				for (int c = 0; c < cols; c++) {
@@ -678,10 +679,6 @@ public:
 						else
 							canvas->fill(c * 9, r * 16, 9, 16, theme.byID[cell.bColor]);
 
-						if (c < rect.l)	rect.l = c;
-						if (c > rect.r)	rect.r = c;
-						if (r < rect.t) rect.t = r;
-						if (r > rect.b) rect.b = r;
 					}/* else {
 						canvas->fill(c * 9, r * 16, 9, 1, theme.byID[COLOR_DEFINE]);
 						canvas->fill(c * 9, r * 16 + 15, 9, 1, theme.byID[COLOR_DEFINE]);
@@ -689,17 +686,6 @@ public:
 						canvas->fill(c * 9 + 8, r * 16, 1, 16, theme.byID[COLOR_DEFINE]);
 					}*/
 				}
-
-			rect.b++;
-			rect.r++;
-
-			//if (rect.r > rect.l && rect.b > rect.t)
-			//	printf("rect: %d %d %d %d\n", rect.l, rect.t, rect.r, rect.b);
-
-			rect.l *= 9;
-			rect.r *= 9;
-			rect.t *= 16;
-			rect.b *= 16;
 		}
 	}
 };
@@ -864,6 +850,7 @@ struct Application {
 			XNextEvent(display, &e);
 			switch (e.type) {
 				case FocusIn:
+					invalidate();
 					paint();
 				break;
 				case ButtonPress :
