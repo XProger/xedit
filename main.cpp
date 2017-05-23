@@ -866,7 +866,7 @@ struct Application {
 				case FocusIn:
 					paint();
 					invalidate();
-					present(window);
+					canvas->present(window);
 				break;
 				case ButtonPress :
 					if (e.xbutton.button == 4)	editor->onScroll(0, +1);
