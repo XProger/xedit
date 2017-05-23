@@ -796,7 +796,7 @@ struct Application {
 		int screen = DefaultScreen(display);
 		
 		XSetWindowAttributes attr;
-		attr.event_mask = ExposureMask | PointerMotionMask | ButtonPressMask | KeyPressMask | StructureNotifyMask;		
+		attr.event_mask = ExposureMask | PointerMotionMask | ButtonPressMask | KeyPressMask | StructureNotifyMask | FocusChangeMask;		
 
 		window = XCreateWindow(display, root, 0, 0, width, height, 0, 0, InputOutput, NULL, CWEventMask, &attr);
 					
@@ -863,6 +863,9 @@ struct Application {
 		while (!quit) {
 			XNextEvent(display, &e);
 			switch (e.type) {
+				case FocusIn:
+					paint();
+				break;
 				case ButtonPress :
 					if (e.xbutton.button == 4)	editor->onScroll(0, +1);
 					if (e.xbutton.button == 5)	editor->onScroll(0, -1);
