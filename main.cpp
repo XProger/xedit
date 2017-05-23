@@ -865,6 +865,8 @@ struct Application {
 			switch (e.type) {
 				case FocusIn:
 					paint();
+					invalidate();
+					present(window);
 				break;
 				case ButtonPress :
 					if (e.xbutton.button == 4)	editor->onScroll(0, +1);
