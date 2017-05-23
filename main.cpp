@@ -864,8 +864,8 @@ struct Application {
 			XNextEvent(display, &e);
 			switch (e.type) {
 				case FocusIn:
-					paint();
 					invalidate();
+					paint();
 					canvas->present(window);
 				break;
 				case ButtonPress :
