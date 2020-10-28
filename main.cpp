@@ -45,7 +45,7 @@ void convertFont(const char *inName, const char *outName) {
 	
 	if (tga->width != 128 || tga->height != 256 || tga->bpp != 32) {
 		printf("! wrong %s format\n", inName);
-		delete data;
+		delete[] data;
 		return;
 	}
 
@@ -74,8 +74,8 @@ void convertFont(const char *inName, const char *outName) {
 	fwrite(res, sizeof(res[0]), count, f);
 	fclose(f);
 
-	delete data;
-	delete res;
+	delete[] data;
+	delete[] res;
 
 	printf("convert %s -> %s\n", inName, outName);
 }
@@ -121,7 +121,7 @@ struct BitFont {
 	}
 
 	~BitFont() {
-		delete data;
+		delete[] data;
 	}
 
 	void putChar(unsigned char c, Color fColor, Color bColor, Color *pixel, int stride) {
@@ -443,31 +443,7 @@ public:
 						else
 							if (checkType(str))
 								lex.id = Lexeme::ID_TYPE;
-			/*
-				char *t;
-				switch (lex.id) {
-					case Lexeme::ID_OPCODE :
-						t = "O";
-						break;
-					case Lexeme::ID_NUMBER :
-						t = "N";
-						break;
-					case Lexeme::ID_TEXT :
-						t = "T";
-						break;
-					case Lexeme::ID_COMMENT :
-						t = "/";
-						break;
-					case Lexeme::ID_ARGUMENT :
-						t = "A";
-						break;
-					default :
-						t = "C";
-				}
-
-				printf("%d\t%s\t |%s|\n", i, t, str);
-			*/
-				delete str;
+				delete[] str;
 			};
 
 		};
@@ -604,13 +580,11 @@ public:
 
 	void render(Canvas *canvas) {
 		if (offset.x) {
-		//	canvas->scrollX(offset.x * 9);
 			scroll.x += offset.x;
 			offset.x = 0;
 		}
 
 		if (offset.y) {
-		//	canvas->scrollY(offset.y * 16);
 			scroll.y += offset.y;
 			offset.y = 0;
 		}
@@ -658,7 +632,6 @@ public:
 			pos = Point(0, scroll.y);
 			for (int i = 0; i < lines; i++) {
 				snprintf(num, sizeof(num), "%d", i);
-			//	itoa(i + 1, num, 10);
 				int len = strlen(num);
 				pos.x = (3 - len);
 				print(0, pos.x, pos.y, COLOR_OPCODE, COLOR_BACK_NORMAL, num, len);
@@ -679,12 +652,7 @@ public:
 						else
 							canvas->fill(c * 9, r * 16, 9, 16, theme.byID[cell.bColor]);
 
-					}/* else {
-						canvas->fill(c * 9, r * 16, 9, 1, theme.byID[COLOR_DEFINE]);
-						canvas->fill(c * 9, r * 16 + 15, 9, 1, theme.byID[COLOR_DEFINE]);
-						canvas->fill(c * 9, r * 16, 1, 16, theme.byID[COLOR_DEFINE]);
-						canvas->fill(c * 9 + 8, r * 16, 1, 16, theme.byID[COLOR_DEFINE]);
-					}*/
+					}
 				}
 		}
 	}
